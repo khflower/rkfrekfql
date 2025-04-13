@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>개인용 Gemini 채팅</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 사용자 정의 스타일 */
+        body {
+            font-family: 'Inter', sans-serif; /* 기본 폰트 설정 */
+        }
+        #chat-output::-webkit-scrollbar { width: 8px; }
+        #chat-output::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+        #chat-output::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+        #chat-output::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .message-container { /* 메시지 + 버튼 래퍼 */
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 0.5rem; /* message 클래스의 mb-2 대신 사용 */
+        }
+        .message-container.user { align-items: flex-end; }
+        .message-container.model { align-items: flex-start; }
+
+        .message {
+            max-width: 90%;
+            word-wrap: break-word;
+            position: relative; /* 버튼 위치 기준 */
+             padding: 0.75rem; /* p-3 */
+             border-radius: 0.5rem; /* rounded-lg */
+             box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* shadow-sm */
+        }
+        .user-message {
+            background-color: #d1eaff;
+        }
+        .model-message {
+            background-color: #e2e8f0;
+        }
+
+        /* 메시지 액션 버튼 (수정/삭제) */
+        .message-actions {
+            position: absolute;
+            top: 2px;
+            right: 4px;
+            display: none; /* 기본 숨김 */
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            padding: 1px 3px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .message-container:hover .message-actions {
+            display: flex; /* 호버 시 표시 */
+            gap: 4px;
+        }
+        .message-actions button {
+            background: none; border: none; cursor: pointer;
+            padding: 2px; line-height: 1;
+        }
+        .message-actions button svg { width: 14px; height: 14px; color: #555; }
+        .message-actions button:hover svg { color: #000; }
+
+         /* 수정 모드 스타일 */
+         .edit-textarea {
+             width: 100%; padding: 8px; border: 1px solid #ccc;
+             border-radius: 4px; font-size: inherit; min-height: 60px;
+             resize: vertical; margin-bottom: 4px;
+         }
+         .edit-actions button {
+             padding: 4px 8px; font-size: 12px; border-radius: 4px; cursor: pointer;
+         }
+         .edit-actions .save-btn { background-color: #4CAF50; color: white; }
+         .edit-actions .cancel-btn { background-color: #f44336; color: white; margin-left: 4px;}
+
+        /* 로딩 스피너 스타일 */
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #3498db;
+            border-radius: 50%; width: 24px; height: 24px;
+            animation: spin 1s linear infinite; margin: 10px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 이미지 미리보기 스타일 */
+        #image-preview img {
+            max-width: 100px; max-height: 100px; margin-top: 5px;
+            border-radius: 8px; border: 1px solid #ccc;
+        }
+        /* 모바일 환경에서 사이드바 스크롤 */
+        @media (max-width: 768px) {
+            .mobile-sidebar-scroll { max-height: 40vh; overflow-y: auto; }
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 flex flex-col h-screen">
+
+    <header class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center">
+        <h1 class="text-xl sm:text-2xl font-bold text-center flex-grow">Gemini 2.5 Pro 채팅</h1>
+        <div class="hidden sm:flex space-x-2">
+             <button id="new-chat-btn" class="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 text-sm">새 대화</button>
+             <button id="save-chat-btn" class="px-3 py-1 bg-green-500 text-white rounded-md hover:bg-green-600 text-sm">대화 저장</button>
+             <button id="load-chat-btn" class="px-3 py-1 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 text-sm">대화 불러오기</button>
+             <input type="file" id="load-chat-input" accept=".json" class="hidden">
+        </div>
+    </header>
+
+    <div class="flex flex-col md:flex-row flex-1 overflow-hidden p-2 sm:p-4 space-y-4 md:space-y-0 md:space-x-4">
+
+        <aside class="w-full md:w-1/4 bg-white p-3 sm:p-4 rounded-lg shadow flex flex-col mobile-sidebar-scroll">
+            <h2 class="text-lg font-semibold mb-3 border-b pb-2">설정</h2>
+            <div class="mb-3">
+                <label for="api-key-input" class="block text-sm font-medium text-gray-700 mb-1">새 API 키 추가:</label>
+                <div class="flex space-x-2">
+                    <input type="password" id="api-key-input" class="flex-grow p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm" placeholder="Google API 키 입력">
+                    <button id="add-key-btn" class="px-3 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm">추가</button>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label for="api-key-select" class="block text-sm font-medium text-gray-700 mb-1">사용할 API 키 선택:</label>
+                <select id="api-key-select" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mb-2 text-sm">
+                    <option value="">-- 키를 선택하세요 --</option>
+                </select>
+                 <button id="remove-key-btn" class="w-full px-3 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 text-sm">선택한 키 삭제</button>
+            </div>
+             <p class="text-xs text-gray-500 mb-3">API 키는 브라우저 저장소(localStorage)에만 저장됩니다.</p>
+             <div class="mb-3">
+                <label for="system-prompt-input" class="block text-sm font-medium text-gray-700 mb-1">시스템 프롬프트:</label>
+                <textarea id="system-prompt-input" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm" rows="4" placeholder="모델에게 전달할 시스템 메시지를 입력하세요 (선택 사항)"></textarea>
+            </div>
+            <div class="sm:hidden mt-auto space-y-2 pt-3 border-t">
+                 <button id="new-chat-btn-mobile" class="w-full px-3 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 text-sm">새 대화</button>
+                 <button id="save-chat-btn-mobile" class="w-full px-3 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 text-sm">대화 저장</button>
+                 <button id="load-chat-btn-mobile" class="w-full px-3 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 text-sm">대화 불러오기</button>
+            </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col bg-white rounded-lg shadow overflow-hidden">
+            <div id="chat-output" class="flex-1 p-4 overflow-y-auto space-y-0 flex flex-col bg-gray-50"> </div>
+            <div id="loading-indicator" class="hidden p-4 text-center">
+                <div class="loader"></div>
+                <p class="text-sm text-gray-500">응답을 기다리는 중...</p>
+            </div>
+            <div class="p-2 sm:p-4 border-t border-gray-200 bg-white">
+                 <div id="image-preview-container" class="mb-2 flex items-center space-x-2 hidden">
+                    <div id="image-preview"></div>
+                    <button id="remove-image-btn" class="text-red-500 hover:text-red-700 text-sm font-medium">이미지 제거</button>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <textarea id="message-input" class="flex-grow p-2 border border-gray-300 rounded-md resize-none focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base" rows="2" placeholder="메시지를 입력하세요..."></textarea>
+                    <label for="image-upload" class="cursor-pointer p-2 bg-gray-200 rounded-md hover:bg-gray-300" title="이미지 업로드">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 sm:h-6 sm:w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                        <input type="file" id="image-upload" accept="image/*" class="hidden">
+                    </label>
+                    <button id="send-button" class="px-3 py-2 sm:px-4 sm:py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base">전송</button>
+                </div>
+                 <div class="mt-2 text-right text-xs text-gray-500">
+                    예상 토큰: <span id="token-count-display">N/A</span>
+                 </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- 요소 가져오기 ---
+        const apiKeyInput = document.getElementById('api-key-input');
+        const addKeyBtn = document.getElementById('add-key-btn');
+        const apiKeySelect = document.getElementById('api-key-select');
+        const removeKeyBtn = document.getElementById('remove-key-btn');
+        const systemPromptInput = document.getElementById('system-prompt-input');
+        const chatOutput = document.getElementById('chat-output');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const imageUpload = document.getElementById('image-upload');
+        const imagePreviewContainer = document.getElementById('image-preview-container');
+        const imagePreview = document.getElementById('image-preview');
+        const removeImageBtn = document.getElementById('remove-image-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const newChatBtn = document.getElementById('new-chat-btn');
+        const saveChatBtn = document.getElementById('save-chat-btn');
+        const loadChatBtn = document.getElementById('load-chat-btn');
+        const loadChatInput = document.getElementById('load-chat-input');
+        const newChatBtnMobile = document.getElementById('new-chat-btn-mobile');
+        const saveChatBtnMobile = document.getElementById('save-chat-btn-mobile');
+        const loadChatBtnMobile = document.getElementById('load-chat-btn-mobile');
+        const tokenCountDisplay = document.getElementById('token-count-display'); // 토큰 수 표시 요소
+
+        // --- 상태 변수 ---
+        let apiKeys = [];
+        let chatHistory = [];
+        let selectedImageBase64 = null;
+        let selectedImageMimeType = null;
+        let isLoading = false;
+        let messageCounter = 0;
+        let debounceTimer; // 디바운스 타이머
+
+        // --- 상수 ---
+        // 모델 이름을 상수로 정의 (생성 및 토큰 계산에 동일하게 사용)
+        const TARGET_MODEL_NAME = "gemini-2.5-pro-exp-03-25";
+        const API_URL_BASE = `https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL_NAME}:generateContent?key=`;
+        const COUNT_TOKENS_URL_BASE = `https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL_NAME}:countTokens?key=`;
+        const LOCAL_STORAGE_KEY = 'gemini_api_keys';
+        const LOCAL_STORAGE_PROMPT_KEY = 'gemini_system_prompt';
+        const DEBOUNCE_DELAY = 500; // 토큰 계산 API 호출 지연 시간 (ms)
+
+        // --- 아이콘 SVG ---
+        const editIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" /></svg>`;
+        const deleteIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>`;
+
+
+        // --- 유틸리티 함수 ---
+        // 디바운스 함수: 지정된 시간 동안 함수 호출 지연
+        function debounce(func, delay) {
+            return function(...args) {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        }
+
+        // --- 함수 ---
+
+        function loadApiKeys() { /* 이전과 동일 */
+            const storedKeys = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (storedKeys) apiKeys = JSON.parse(storedKeys);
+            updateApiKeySelect();
+        }
+        function saveApiKeys() { /* 이전과 동일 */
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(apiKeys));
+        }
+        function loadSystemPrompt() { /* 이전과 동일 */
+            const storedPrompt = localStorage.getItem(LOCAL_STORAGE_PROMPT_KEY);
+            if (storedPrompt) systemPromptInput.value = storedPrompt;
+        }
+        function saveSystemPrompt() { /* 이전과 동일 */
+            localStorage.setItem(LOCAL_STORAGE_PROMPT_KEY, systemPromptInput.value);
+        }
+        function updateApiKeySelect() { /* 이전과 동일 */
+            const selectedValue = apiKeySelect.value;
+            apiKeySelect.innerHTML = '<option value="">-- 키를 선택하세요 --</option>';
+            apiKeys.forEach((key, index) => {
+                const displayKey = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : key;
+                const option = document.createElement('option');
+                option.value = key;
+                option.textContent = `키 ${index + 1} (${displayKey})`;
+                apiKeySelect.appendChild(option);
+            });
+            if (apiKeys.includes(selectedValue)) apiKeySelect.value = selectedValue;
+             removeKeyBtn.disabled = apiKeys.length === 0 || !apiKeySelect.value;
+             // API 키 변경 시 토큰 수 업데이트
+             debouncedUpdateTokenCount();
+        }
+        function addApiKey() { /* 이전과 동일 */
+            const newKey = apiKeyInput.value.trim();
+            if (newKey && !apiKeys.includes(newKey)) {
+                apiKeys.push(newKey);
+                saveApiKeys();
+                updateApiKeySelect();
+                apiKeyInput.value = '';
+                alert('API 키가 추가되었습니다.');
+            } else if (apiKeys.includes(newKey)) {
+                alert('이미 존재하는 API 키입니다.');
+            } else {
+                 alert('유효한 API 키를 입력하세요.');
+            }
+        }
+        function removeApiKey() { /* 이전과 동일 */
+            const selectedKey = apiKeySelect.value;
+            if (selectedKey) {
+                if (confirm('선택한 API 키를 삭제하시겠습니까?')) {
+                    apiKeys = apiKeys.filter(key => key !== selectedKey);
+                    saveApiKeys();
+                    updateApiKeySelect();
+                     alert('API 키가 삭제되었습니다.');
+                }
+            } else {
+                alert('삭제할 API 키를 선택하세요.');
+            }
+        }
+
+        function displayMessage(sender, parts, messageId, addToHistory = true) { /* 이전과 동일 */
+            const messageParts = Array.isArray(parts) ? parts : [{ text: parts }];
+            const messageContainer = document.createElement('div');
+            messageContainer.classList.add('message-container', sender === 'user' ? 'user' : 'model');
+            messageContainer.dataset.messageId = messageId;
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'model-message');
+            messageElement.id = `message-body-${messageId}`;
+            let messageContentHtml = '';
+            let isEditable = true;
+            messageParts.forEach(part => {
+                if (part.text) {
+                    messageContentHtml += part.text.replace(/\n/g, '<br>');
+                } else if (part.inline_data) {
+                    isEditable = false;
+                    messageContentHtml += `<br><img src="data:${part.inline_data.mime_type};base64,${part.inline_data.data}" alt="첨부 이미지" style="max-width: 150px; max-height: 150px; margin-top: 5px; border-radius: 5px;">`;
+                } else {
+                    isEditable = false;
+                }
+            });
+            messageElement.innerHTML = messageContentHtml;
+            const actionsContainer = document.createElement('div');
+            actionsContainer.classList.add('message-actions');
+            if (isEditable) {
+                const editButton = document.createElement('button');
+                editButton.title = '수정';
+                editButton.innerHTML = editIconSVG;
+                editButton.onclick = () => startEditMessage(messageId);
+                actionsContainer.appendChild(editButton);
+            }
+            const deleteButton = document.createElement('button');
+            deleteButton.title = '삭제';
+            deleteButton.innerHTML = deleteIconSVG;
+            deleteButton.onclick = () => deleteMessage(messageId);
+            actionsContainer.appendChild(deleteButton);
+            messageElement.appendChild(actionsContainer);
+            messageContainer.appendChild(messageElement);
+            chatOutput.appendChild(messageContainer);
+            chatOutput.scrollTop = chatOutput.scrollHeight;
+            if (addToHistory) {
+                 const role = (sender === 'user') ? 'user' : 'model';
+                 chatHistory.push({ id: messageId, role: role, parts: messageParts });
+            }
+        }
+
+        function deleteMessage(messageId) { /* 이전과 동일 */
+            if (confirm('메시지를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+                const messageContainer = chatOutput.querySelector(`.message-container[data-message-id="${messageId}"]`);
+                if (messageContainer) messageContainer.remove();
+                const indexToDelete = chatHistory.findIndex(msg => msg.id === messageId);
+                if (indexToDelete > -1) {
+                    chatHistory.splice(indexToDelete, 1);
+                     console.log("Chat history after deletion:", chatHistory);
+                     debouncedUpdateTokenCount(); // 삭제 후 토큰 수 업데이트
+                }
+            }
+        }
+
+        function startEditMessage(messageId) { /* 이전과 동일 */
+            const messageBodyElement = document.getElementById(`message-body-${messageId}`);
+            if (!messageBodyElement) return;
+            const existingEditArea = chatOutput.querySelector('.edit-textarea');
+            if (existingEditArea) {
+                const editingId = existingEditArea.closest('.message-container').dataset.messageId;
+                cancelMessageEdit(editingId);
+            }
+            const messageData = chatHistory.find(msg => msg.id === messageId);
+            const originalText = messageData.parts.reduce((acc, part) => acc + (part.text || ''), '');
+            messageBodyElement.style.display = 'none';
+            const editContainer = document.createElement('div');
+            editContainer.id = `edit-container-${messageId}`;
+            const textarea = document.createElement('textarea');
+            textarea.classList.add('edit-textarea');
+            textarea.value = originalText;
+            const editActions = document.createElement('div');
+            editActions.classList.add('edit-actions');
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = '저장';
+            saveBtn.classList.add('save-btn');
+            saveBtn.onclick = () => saveMessageEdit(messageId);
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = '취소';
+            cancelBtn.classList.add('cancel-btn');
+            cancelBtn.onclick = () => cancelMessageEdit(messageId);
+            editActions.appendChild(saveBtn);
+            editActions.appendChild(cancelBtn);
+            editContainer.appendChild(textarea);
+            editContainer.appendChild(editActions);
+            messageBodyElement.parentNode.appendChild(editContainer);
+            textarea.focus();
+        }
+
+        function saveMessageEdit(messageId) { /* 이전과 동일 */
+            const editContainer = document.getElementById(`edit-container-${messageId}`);
+            const textarea = editContainer.querySelector('.edit-textarea');
+            const newText = textarea.value;
+            const messageIndex = chatHistory.findIndex(msg => msg.id === messageId);
+            if (messageIndex > -1) {
+                chatHistory[messageIndex].parts = [{ text: newText }];
+                 console.log("Chat history after edit:", chatHistory);
+                 debouncedUpdateTokenCount(); // 수정 후 토큰 수 업데이트
+            }
+            const messageBodyElement = document.getElementById(`message-body-${messageId}`);
+            messageBodyElement.innerHTML = newText.replace(/\n/g, '<br>');
+             const actionsContainer = document.createElement('div');
+             actionsContainer.classList.add('message-actions');
+             const editButton = document.createElement('button');
+             editButton.title = '수정';
+             editButton.innerHTML = editIconSVG;
+             editButton.onclick = () => startEditMessage(messageId);
+             actionsContainer.appendChild(editButton);
+             const deleteButton = document.createElement('button');
+             deleteButton.title = '삭제';
+             deleteButton.innerHTML = deleteIconSVG;
+             deleteButton.onclick = () => deleteMessage(messageId);
+             actionsContainer.appendChild(deleteButton);
+             messageBodyElement.appendChild(actionsContainer);
+            editContainer.remove();
+            messageBodyElement.style.display = '';
+        }
+
+        function cancelMessageEdit(messageId) { /* 이전과 동일 */
+            const editContainer = document.getElementById(`edit-container-${messageId}`);
+            if (editContainer) editContainer.remove();
+            const messageBodyElement = document.getElementById(`message-body-${messageId}`);
+            if (messageBodyElement) messageBodyElement.style.display = '';
+        }
+
+        function handleImageUpload(event) { /* 이전과 동일, 토큰 업데이트 추가 */
+            const file = event.target.files[0];
+            if (file) {
+                if (file.size > 5 * 1024 * 1024) {
+                    alert('이미지 파일 크기는 5MB를 초과할 수 없습니다.');
+                    imageUpload.value = ''; return;
+                }
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    selectedImageBase64 = reader.result.split(',')[1];
+                    selectedImageMimeType = file.type;
+                    imagePreview.innerHTML = `<img src="${reader.result}" alt="선택된 이미지">`;
+                    imagePreviewContainer.classList.remove('hidden');
+                    removeImageBtn.disabled = false;
+                    debouncedUpdateTokenCount(); // 이미지 변경 시 토큰 수 업데이트
+                }
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function removeImage() { /* 이전과 동일, 토큰 업데이트 추가 */
+            selectedImageBase64 = null;
+            selectedImageMimeType = null;
+            imageUpload.value = '';
+            imagePreview.innerHTML = '';
+            imagePreviewContainer.classList.add('hidden');
+             removeImageBtn.disabled = true;
+             debouncedUpdateTokenCount(); // 이미지 제거 시 토큰 수 업데이트
+        }
+
+        function setLoading(loading) { /* 이전과 동일 */
+            isLoading = loading;
+            loadingIndicator.style.display = loading ? 'block' : 'none';
+            sendButton.disabled = loading;
+            messageInput.disabled = loading;
+            imageUpload.disabled = loading;
+            removeImageBtn.disabled = loading || selectedImageBase64 === null;
+        }
+
+        async function sendMessage() { /* 이전과 동일 */
+            const messageText = messageInput.value.trim();
+            const selectedApiKey = apiKeySelect.value;
+            const systemPrompt = systemPromptInput.value.trim();
+
+            if (!selectedApiKey) { alert('사용할 API 키를 선택하세요.'); return; }
+            if (!messageText && !selectedImageBase64) { alert('메시지를 입력하거나 이미지를 첨부하세요.'); return; }
+            if (isLoading) return;
+
+            setLoading(true);
+
+            const userParts = [];
+            if (messageText) userParts.push({ text: messageText });
+            if (selectedImageBase64 && selectedImageMimeType) {
+                userParts.push({ inline_data: { mime_type: selectedImageMimeType, data: selectedImageBase64 } });
+            }
+
+            const userMessageId = `msg-${Date.now()}-${messageCounter++}`;
+            displayMessage('user', userParts, userMessageId, true);
+
+            // API 요청 시에는 ID 제외하고 전송
+            const requestBody = { contents: chatHistory.map(({ role, parts }) => ({ role, parts })) };
+            if (systemPrompt) {
+                requestBody.system_instruction = { parts: [{ text: systemPrompt }] };
+            }
+
+            // 입력 필드 초기화 및 토큰 수 업데이트
+            messageInput.value = '';
+            removeImage(); // 이미지 제거 시 내부적으로 토큰 업데이트 호출됨
+            debouncedUpdateTokenCount(); // 전송 후 입력 필드 비워졌으므로 토큰 업데이트
+
+            try {
+                const response = await fetch(API_URL_BASE + selectedApiKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                    let errorData;
+                    try { errorData = await response.json(); } catch (e) { /* ignore */ }
+                    const errorMessage = errorData?.error?.message || `API 요청 실패: ${response.status}`;
+                    throw new Error(errorMessage);
+                }
+                const data = await response.json();
+
+                let modelResponseParts = [{ text: "응답을 받지 못했습니다." }];
+                if (data.candidates?.[0]?.content?.parts) {
+                     modelResponseParts = data.candidates[0].content.parts;
+                } else {
+                    console.error("Unexpected API response structure:", data);
+                     modelResponseParts = [{ text: "예상치 못한 응답 형식입니다. 콘솔을 확인하세요." }];
+                }
+
+                const modelMessageId = `msg-${Date.now()}-${messageCounter++}`;
+                displayMessage('model', modelResponseParts, modelMessageId, true);
+                debouncedUpdateTokenCount(); // 모델 응답 후 토큰 수 업데이트
+
+            } catch (error) {
+                console.error('API 호출 오류:', error);
+                 const errorMessageId = `msg-${Date.now()}-${messageCounter++}`;
+                displayMessage('model', [{ text: `오류 발생: ${error.message}` }], errorMessageId, true);
+                debouncedUpdateTokenCount(); // 오류 발생 후 토큰 수 업데이트
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function saveChatHistory() { /* 이전과 동일 */
+            if (chatHistory.length === 0) { alert('저장할 대화 내용이 없습니다.'); return; }
+            const dataToSave = { systemPrompt: systemPromptInput.value, history: chatHistory };
+            const jsonString = JSON.stringify(dataToSave, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            a.download = `gemini_chat_${timestamp}.json`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function triggerLoadChat() { /* 이전과 동일 */
+            loadChatInput.click();
+        }
+
+        function handleChatLoad(event) { /* 이전과 동일, 토큰 업데이트 추가 */
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const loadedData = JSON.parse(e.target.result);
+                    if (!loadedData || !Array.isArray(loadedData.history)) {
+                         throw new Error('잘못된 파일 형식입니다. history 배열이 필요합니다.');
+                    }
+                    systemPromptInput.value = loadedData.systemPrompt || '';
+                    saveSystemPrompt();
+                    chatOutput.innerHTML = '';
+                    chatHistory = loadedData.history.map((item, index) => ({
+                         ...item,
+                         id: item.id || `msg-loaded-${Date.now()}-${index}`
+                    }));
+                    messageCounter = chatHistory.length;
+                    chatHistory.forEach(item => {
+                        displayMessage(item.role === 'user' ? 'user' : 'model', item.parts, item.id, false);
+                    });
+                    alert('대화 내역을 불러왔습니다.');
+                    debouncedUpdateTokenCount(); // 대화 로드 후 토큰 수 업데이트
+                } catch (error) {
+                    console.error('대화 불러오기 오류:', error);
+                    alert(`대화 내역을 불러오는 중 오류가 발생했습니다: ${error.message}`);
+                } finally {
+                    loadChatInput.value = '';
+                }
+            };
+            reader.onerror = function() {
+                 alert('파일을 읽는 중 오류가 발생했습니다.'); loadChatInput.value = '';
+            };
+            reader.readAsText(file);
+        }
+
+        function displayInitialMessage() { /* 이전과 동일 */
+             const initialMsgId = `msg-initial-${Date.now()}`;
+             displayMessage('model', '안녕하세요! 사용할 API 키를 선택하고 메시지를 입력하세요. 이미지 파일 첨부도 가능합니다.', initialMsgId, false);
+        }
+
+        function startNewChat() { /* 이전과 동일, 토큰 업데이트 추가 */
+            if (confirm('새 대화를 시작하시겠습니까? 현재 대화 내용이 초기화됩니다.')) {
+                chatHistory = [];
+                messageCounter = 0;
+                chatOutput.innerHTML = '';
+                removeImage();
+                displayInitialMessage();
+                alert('새 대화를 시작합니다.');
+                debouncedUpdateTokenCount(); // 새 대화 시작 시 토큰 수 업데이트 (초기 메시지 기준)
+            }
+        }
+
+        // 토큰 수 계산 및 업데이트 함수
+        async function updateTokenCount() {
+            const selectedApiKey = apiKeySelect.value;
+            if (!selectedApiKey) {
+                tokenCountDisplay.textContent = 'N/A';
+                return;
+            }
+
+            // 현재 입력 중인 내용 포함하여 parts 구성
+            const currentInputText = messageInput.value.trim();
+            const currentParts = [];
+            if (currentInputText) {
+                currentParts.push({ text: currentInputText });
+            }
+            // 현재 선택된 이미지 포함
+            if (selectedImageBase64 && selectedImageMimeType) {
+                currentParts.push({
+                    inline_data: {
+                        mime_type: selectedImageMimeType,
+                        data: selectedImageBase64
+                    }
+                });
+            }
+
+            // 전체 대화 내용 구성 (히스토리 + 현재 입력)
+            // API 요청 형식에 맞게 ID 제외
+            const contentsForCount = chatHistory.map(({ role, parts }) => ({ role, parts }));
+            // 현재 입력 내용이 있을 경우 user 역할로 추가
+            if (currentParts.length > 0) {
+                 contentsForCount.push({ role: 'user', parts: currentParts });
+            }
+
+             // 시스템 프롬프트 포함 (내용이 있을 경우)
+             const systemPrompt = systemPromptInput.value.trim();
+             const requestBodyForCount = {
+                 contents: contentsForCount
+             };
+             if (systemPrompt) {
+                 requestBodyForCount.system_instruction = { parts: [{ text: systemPrompt }] };
+             }
+
+
+            // 내용이 없으면 0으로 표시 (API 호출 방지)
+            if (contentsForCount.length === 0 && !systemPrompt) {
+                 tokenCountDisplay.textContent = '0';
+                 return;
+            }
+
+
+            tokenCountDisplay.textContent = '계산 중...'; // 계산 중 표시
+
+            try {
+                // countTokens API 호출
+                const response = await fetch(COUNT_TOKENS_URL_BASE + selectedApiKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    // 모델 이름 명시 (API 요구사항)
+                    // body: JSON.stringify({ model: `models/${TARGET_MODEL_NAME}`, contents: contentsForCount }),
+                    body: JSON.stringify(requestBodyForCount), // 시스템 프롬프트 포함
+                });
+
+                if (!response.ok) {
+                    // 오류 발생 시 처리
+                    console.error('Token count API error:', response.status, response.statusText);
+                    let errorData;
+                    try { errorData = await response.json(); console.error(errorData); } catch(e) {}
+                    tokenCountDisplay.textContent = '오류';
+                    return;
+                }
+
+                const data = await response.json();
+                if (data.totalTokens !== undefined) {
+                    tokenCountDisplay.textContent = data.totalTokens;
+                } else {
+                    tokenCountDisplay.textContent = 'N/A';
+                }
+
+            } catch (error) {
+                console.error('Failed to fetch token count:', error);
+                tokenCountDisplay.textContent = '오류';
+            }
+        }
+
+        // 디바운스 적용된 토큰 업데이트 함수
+        const debouncedUpdateTokenCount = debounce(updateTokenCount, DEBOUNCE_DELAY);
+
+        // --- 이벤트 리스너 ---
+        addKeyBtn.addEventListener('click', addApiKey);
+        removeKeyBtn.addEventListener('click', removeApiKey);
+        sendButton.addEventListener('click', sendMessage);
+        // 메시지 입력 시 디바운스된 토큰 업데이트 호출
+        messageInput.addEventListener('input', debouncedUpdateTokenCount);
+        imageUpload.addEventListener('change', handleImageUpload); // 내부에서 토큰 업데이트 호출
+        removeImageBtn.addEventListener('click', removeImage); // 내부에서 토큰 업데이트 호출
+        apiKeySelect.addEventListener('change', updateApiKeySelect); // 내부에서 토큰 업데이트 호출
+        systemPromptInput.addEventListener('input', debouncedUpdateTokenCount); // 시스템 프롬프트 변경 시 토큰 업데이트
+        newChatBtn.addEventListener('click', startNewChat); // 내부에서 토큰 업데이트 호출
+        saveChatBtn.addEventListener('click', saveChatHistory);
+        loadChatBtn.addEventListener('click', triggerLoadChat); // 로드 후 handleChatLoad에서 토큰 업데이트 호출
+        newChatBtnMobile.addEventListener('click', startNewChat); // 내부에서 토큰 업데이트 호출
+        saveChatBtnMobile.addEventListener('click', saveChatHistory);
+        loadChatBtnMobile.addEventListener('click', triggerLoadChat); // 로드 후 handleChatLoad에서 토큰 업데이트 호출
+        loadChatInput.addEventListener('change', handleChatLoad); // 내부에서 토큰 업데이트 호출
+
+        // --- 초기화 ---
+        loadApiKeys();
+        loadSystemPrompt();
+        displayInitialMessage();
+        setLoading(false);
+        removeImageBtn.disabled = true;
+        // 초기 토큰 수 계산 (API 키가 선택되어 있을 경우)
+        if (apiKeySelect.value) {
+             debouncedUpdateTokenCount();
+        } else {
+            tokenCountDisplay.textContent = 'N/A';
+        }
+
+    </script>
+
+</body>
+</html>
